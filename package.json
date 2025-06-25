@@ -1,14 +1,14 @@
 {
-  "name": "google-search-mcp",
-  "version": "0.1.0",
-  "description": "MCP server for Google search and webpage analysis",
+  "name": "google-search-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Google Search with SSE support",
   "type": "module",
+  "main": "dist/google-search.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/google-search.js",
-    "dev": "tsc -w",
-    "start:python": "concurrently \"python google_search.py\" \"python link_view.py\"",
-    "start:all": "concurrently \"npm run start:python\" \"npm run start\""
+    "dev": "tsx watch src/google-search.ts",
+    "test": "jest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",
@@ -22,9 +22,14 @@
     "jsdom": "^25.0.1",
     "markdown-it": "^14.1.0",
     "readability": "^0.1.0",
-    "turndown": "^7.2.0"
+    "turndown": "^7.2.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "tsx": "^4.0.0",
     "@types/cheerio": "^0.22.35",
     "@types/dompurify": "^3.0.5",
     "@types/express": "^4.17.21",
@@ -33,5 +38,11 @@
     "@types/node": "^20.17.21",
     "concurrently": "^9.1.0",
     "typescript": "^5.7.2"
-  }
+  },
+  "keywords": [
+    "mcp",
+    "google-search",
+    "sse",
+    "server-sent-events"
+  ]
 }

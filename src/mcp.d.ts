@@ -1,3 +1,5 @@
+import { Request, Response } from 'express';
+
 declare module '@modelcontextprotocol/sdk/server' {
   export class Server {
     constructor(
@@ -16,6 +18,11 @@ declare module '@modelcontextprotocol/sdk/server' {
       }
     );
 
+    setRequestHandler(
+      schema: any,
+      handler: (request: any) => Promise<any>
+    ): void;
+
     setToolHandler(
       name: string,
       handler: (args: any) => Promise<{
@@ -33,4 +40,15 @@ declare module '@modelcontextprotocol/sdk/server/stdio' {
   export class StdioServerTransport {
     constructor();
   }
+}
+
+declare module '@modelcontextprotocol/sdk/server/sse' {
+  export class SSEServerTransport {
+    constructor(request: Request, response: Response);
+  }
+}
+
+declare module '@modelcontextprotocol/sdk/types' {
+  export const CallToolRequestSchema: any;
+  export const ListToolsRequestSchema: any;
 }

@@ -1,12 +1,19 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { GoogleSearchService } from './services/google-search.service.js';
 import { ContentExtractor } from './services/content-extractor.service.js';
+import express from 'express';
+import cors from 'cors';
 class GoogleSearchServer {
-    constructor() {
+    constructor(port = 3000) {
+        this.port = port;
         this.searchService = new GoogleSearchService();
         this.contentExtractor = new ContentExtractor();
+        this.app = express();
+        // Setup Express middleware
+        this.app.use(cors());
+        this.app.use(express.json());
         this.server = new Server({
             name: 'google-search',
             version: '1.0.0'
@@ -100,6 +107,87 @@ class GoogleSearchServer {
                 }
             }
         });
+        this.setupRoutes();
+        this.setupMCPHandlers();
+    }
+    setupRoutes() {
+        // Health check endpoint
+        this.app.get('/health', (req, res) => {
+            res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+        });
+        // MCP endpoint for SSE
+        this.app.get('/sse', (req, res) => {
+            // Set SSE headers
+            res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Cache-Control'
+            });
+            // Create SSE transport - fix: pass readable/writable streams
+            // @ts-ignore
+            const transport = new SSEServerTransport(res);
+            // Connect the MCP server
+            this.server.connect(transport).catch(error => {
+                console.error('Failed to connect MCP server:', error);
+                res.end();
+            });
+            // Handle client disconnect
+            req.on('close', () => {
+                console.log('Client disconnected');
+                this.server.close().catch(console.error);
+            });
+        });
+        // Alternative HTTP endpoint for direct tool calls (optional)
+        this.app.post('/tools/:toolName', async (req, res) => {
+            try {
+                const { toolName } = req.params;
+                const args = req.body;
+                let result;
+                switch (toolName) {
+                    case 'google_search':
+                        result = await this.handleSearch({
+                            query: args.query,
+                            num_results: args.num_results,
+                            filters: {
+                                site: args.site,
+                                language: args.language,
+                                dateRestrict: args.dateRestrict,
+                                exactTerms: args.exactTerms,
+                                resultType: args.resultType,
+                                page: args.page,
+                                resultsPerPage: args.resultsPerPage,
+                                sort: args.sort
+                            }
+                        });
+                        break;
+                    case 'extract_webpage_content':
+                        result = await this.handleAnalyzeWebpage({
+                            url: args.url,
+                            format: args.format || 'markdown'
+                        });
+                        break;
+                    case 'extract_multiple_webpages':
+                        result = await this.handleBatchAnalyzeWebpages({
+                            urls: args.urls,
+                            format: args.format || 'markdown'
+                        });
+                        break;
+                    default:
+                        return res.status(404).json({ error: `Unknown tool: ${toolName}` });
+                }
+                res.json(result);
+            }
+            catch (error) {
+                console.error('Tool execution error:', error);
+                res.status(500).json({
+                    error: error instanceof Error ? error.message : 'Unknown error occurred'
+                });
+            }
+        });
+    }
+    setupMCPHandlers() {
         // Register tool list handler
         this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
             tools: [
@@ -395,11 +483,15 @@ class GoogleSearchServer {
     }
     async start() {
         try {
-            const transport = new StdioServerTransport();
-            await this.server.connect(transport);
-            console.error('Google Search MCP server running');
-            // Keep the process running
+            this.app.listen(this.port, () => {
+                console.log(`Google Search MCP server running on port ${this.port}`);
+                console.log(`SSE endpoint: http://localhost:${this.port}/sse`);
+                console.log(`Health check: http://localhost:${this.port}/health`);
+                console.log(`Direct API: http://localhost:${this.port}/tools/{toolName}`);
+            });
+            // Graceful shutdown
             process.on('SIGINT', () => {
+                console.log('\nGracefully shutting down...');
                 this.server.close().catch(console.error);
                 process.exit(0);
             });
@@ -416,5 +508,6 @@ class GoogleSearchServer {
     }
 }
 // Start the server
-const server = new GoogleSearchServer();
+const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+const server = new GoogleSearchServer(port);
 server.start().catch(console.error);
