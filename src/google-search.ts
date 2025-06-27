@@ -1,4 +1,5 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+// Make sure you import the correct transport
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { GoogleSearchService } from './services/google-search.service.js';
@@ -14,13 +15,15 @@ class GoogleSearchServer {
   private app: express.Application;
   private port: number;
 
+  // 1. Add a map to store active transport sessions
+  private transports = new Map<string, SSEServerTransport>();
+
   constructor(port: number = 3000) {
     this.port = port;
     this.searchService = new GoogleSearchService();
     this.contentExtractor = new ContentExtractor();
     this.app = express();
 
-    // Setup Express middleware
     this.app.use(cors());
     this.app.use(express.json());
 
@@ -126,40 +129,78 @@ class GoogleSearchServer {
   }
 
   private setupRoutes() {
-    // Health check endpoint
     this.app.get('/health', (req, res) => {
       res.json({ status: 'healthy', timestamp: new Date().toISOString() });
     });
 
-    // MCP endpoint for SSE
+    // 2. Update the GET /sse handler to manage sessions
     this.app.get('/sse', (req, res) => {
-      // Set SSE headers
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Cache-Control'
-      });
+      const tempTransport = new SSEServerTransport('', res);
+      const sessionId = tempTransport.sessionId;
 
-      // Create SSE transport - fix: pass readable/writable streams
-      // @ts-ignore
-      const transport = new SSEServerTransport(res);
+      // Now create the real transport with the unique endpoint
+      const postEndpoint = `/sse/${sessionId}`;
+      const transport = new SSEServerTransport(postEndpoint, res);
 
-      // Connect the MCP server
+      // We must manually link our external transport variable to the new one
+      Object.assign(transport, { _sessionId: sessionId });
+
+      console.log(`Client connected, session created: ${transport.sessionId}`);
+      console.log(`Expecting POSTs to: ${postEndpoint}`);
+
+      // Store the transport instance using its unique session ID
+      this.transports.set(transport.sessionId, transport);
+
+      console.log(`Client connected, session created: ${transport.sessionId}`);
+
+      // Store the transport instance using its unique session ID
+      this.transports.set(transport.sessionId, transport);
+
       this.server.connect(transport).catch(error => {
         console.error('Failed to connect MCP server:', error);
-        res.end();
+        if (!res.writableEnded) {
+          res.end();
+        }
       });
 
-      // Handle client disconnect
       req.on('close', () => {
-        console.log('Client disconnected');
+        console.log(`Client disconnected from SSE, cleaning up session: ${transport.sessionId}`);
+        // IMPORTANT: Clean up the transport from the map when the client disconnects
+        this.transports.delete(transport.sessionId);
         this.server.close().catch(console.error);
       });
     });
 
-    // Alternative HTTP endpoint for direct tool calls (optional)
+    // 3. Add the required POST /sse handler
+    this.app.post('/sse/:sessionId', async (req, res) => {
+      console.log('--- POST /sse/:sessionId request received ---');
+      console.log('Headers:', JSON.stringify(req.headers, null, 2));
+      console.log('Body:', JSON.stringify(req.body, null, 2));
+
+      // The session ID is now in the URL parameters
+      const { sessionId } = req.params;
+
+      console.log(`Session ID found in URL: "${sessionId}"`);
+
+      if (!sessionId) {
+        console.error('ERROR: Session ID not found in URL.');
+        return res.status(400).json({ error: 'Missing sessionId in request URL' });
+      }
+
+      const transport = this.transports.get(sessionId);
+
+      if (!transport) {
+        console.error(`ERROR: No active session found for sessionId: ${sessionId}`);
+        return res.status(404).json({ error: `No active session found for sessionId: ${sessionId}` });
+      }
+
+      console.log(`SUCCESS: Found active transport for session ${sessionId}. Forwarding message.`);
+
+      // Use the transport's built-in message handler for POST requests
+      await transport.handlePostMessage(req, res, req.body);
+    });
+
+    // Your existing /tools/:toolName route is fine as an alternative API
     this.app.post('/tools/:toolName', async (req, res) => {
       try {
         const { toolName } = req.params;
